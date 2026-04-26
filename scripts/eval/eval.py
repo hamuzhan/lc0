@@ -486,6 +486,131 @@ def _safe_int(s: str) -> Optional[int]:
 
 
 # ---------------------------------------------------------------------------
+# scoring
+# ---------------------------------------------------------------------------
+
+def compute_scores(phases_summary: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """Reduce phase summaries to a single set of headline metrics.
+
+    correctness_score (0-100): mean of per-phase correctness rates that were
+    actually measured (unit-test pass-rate, tactics solved-rate). Phases that
+    failed or weren't run are excluded from the average — a partial run still
+    yields a meaningful number.
+
+    stability_score (0-100): fraction of non-skipped phases that completed OK.
+
+    Performance metrics are kept as raw numbers (no normalization to a magic
+    "100"); hardware-dependent absolute NPS is only meaningful relative to a
+    baseline, which `compare` handles separately.
+    """
+    s: Dict[str, Any] = {
+        "correctness_score": None,
+        "stability_score": None,
+        "unit_tests_pct": None,
+        "unit_tests_passed": None,
+        "unit_tests_total": None,
+        "tactics_pct": None,
+        "tactics_solved": None,
+        "tactics_total": None,
+        "backend_peak_nps": None,
+        "backend_peak_batch": None,
+        "search_total_nps": None,
+        "search_total_nodes": None,
+        "phases_ok": 0,
+        "phases_failed": 0,
+        "phases_skipped": 0,
+        "phases_total": 0,
+    }
+
+    correctness_components: List[float] = []
+
+    ut = phases_summary.get(PHASE_UNIT_TESTS, {})
+    if ut.get("status") == "OK" and ut.get("total"):
+        total = int(ut.get("total") or 0)
+        passed = int(ut.get("passed") or 0)
+        s["unit_tests_total"] = total
+        s["unit_tests_passed"] = passed
+        if total > 0:
+            pct = 100.0 * passed / total
+            s["unit_tests_pct"] = round(pct, 2)
+            correctness_components.append(pct)
+
+    tac = phases_summary.get(PHASE_TACTICS, {})
+    if tac.get("status") == "OK" and tac.get("positions"):
+        total = int(tac.get("positions") or 0)
+        solved = int(tac.get("solved") or 0)
+        s["tactics_total"] = total
+        s["tactics_solved"] = solved
+        if total > 0:
+            pct = 100.0 * solved / total
+            s["tactics_pct"] = round(pct, 2)
+            correctness_components.append(pct)
+
+    bb = phases_summary.get(PHASE_BACKEND_BENCH, {})
+    if bb.get("status") == "OK":
+        s["backend_peak_nps"] = bb.get("peak_nps")
+        s["backend_peak_batch"] = bb.get("peak_batch")
+
+    sb = phases_summary.get(PHASE_SEARCH_BENCH, {})
+    if sb.get("status") == "OK":
+        s["search_total_nps"] = sb.get("total_nps")
+        s["search_total_nodes"] = sb.get("total_nodes")
+
+    if correctness_components:
+        s["correctness_score"] = round(
+            sum(correctness_components) / len(correctness_components), 2
+        )
+
+    for info in phases_summary.values():
+        st = info.get("status")
+        s["phases_total"] += 1
+        if st == "OK":
+            s["phases_ok"] += 1
+        elif st == "FAILED":
+            s["phases_failed"] += 1
+        elif st == "SKIPPED":
+            s["phases_skipped"] += 1
+
+    if s["phases_total"]:
+        ran = s["phases_total"] - s["phases_skipped"]
+        if ran:
+            s["stability_score"] = round(100.0 * s["phases_ok"] / ran, 2)
+
+    return s
+
+
+_SCORES_CSV_COLS = [
+    "correctness_score", "stability_score",
+    "unit_tests_passed", "unit_tests_total", "unit_tests_pct",
+    "tactics_solved", "tactics_total", "tactics_pct",
+    "backend_peak_nps", "backend_peak_batch",
+    "search_total_nps", "search_total_nodes",
+    "phases_ok", "phases_failed", "phases_skipped", "phases_total",
+]
+
+
+def write_scores_csv(report_dir: Path, scores: Dict[str, Any]) -> None:
+    write_csv(report_dir / "scores.csv", _SCORES_CSV_COLS, [scores])
+
+
+def _fmt_rate(numerator: Optional[int], denominator: Optional[int],
+              pct: Optional[float]) -> str:
+    if denominator is None:
+        return "_n/a_"
+    if pct is None:
+        return f"{numerator}/{denominator}"
+    return f"{numerator}/{denominator} ({pct:.1f}%)"
+
+
+def _fmt_peak(peak_nps: Optional[int], peak_batch: Optional[int]) -> str:
+    if peak_nps is None:
+        return "_n/a_"
+    if peak_batch is None:
+        return str(peak_nps)
+    return f"{peak_nps} @ batch {peak_batch}"
+
+
+# ---------------------------------------------------------------------------
 # phases
 # ---------------------------------------------------------------------------
 
@@ -763,7 +888,8 @@ def write_summary(report_dir: Path,
                   phases_summary: Dict[str, Dict[str, Any]],
                   started_utc: str, finished_utc: str,
                   total_seconds: float, lc0: Optional[Path],
-                  net: Optional[Path], args: argparse.Namespace) -> None:
+                  net: Optional[Path], args: argparse.Namespace,
+                  scores: Optional[Dict[str, Any]] = None) -> None:
     lines = [
         "# eval summary",
         "",
@@ -775,6 +901,33 @@ def write_summary(report_dir: Path,
         f"- backend:  `{args.backend or '(default)'}`",
         f"- quick:    `{args.quick}`",
         "",
+    ]
+
+    if scores is not None:
+        lines += [
+            "## scores",
+            "",
+            "| metric | value |",
+            "| --- | --- |",
+            f"| **correctness_score** | "
+            f"{('%.1f / 100' % scores['correctness_score']) if scores['correctness_score'] is not None else '_n/a_'} |",
+            f"| **stability_score**   | "
+            f"{('%.1f / 100' % scores['stability_score']) if scores['stability_score'] is not None else '_n/a_'} |",
+            f"| unit tests passed     | "
+            f"{_fmt_rate(scores['unit_tests_passed'], scores['unit_tests_total'], scores['unit_tests_pct'])} |",
+            f"| tactics solved        | "
+            f"{_fmt_rate(scores['tactics_solved'], scores['tactics_total'], scores['tactics_pct'])} |",
+            f"| backend peak NPS      | "
+            f"{_fmt_peak(scores['backend_peak_nps'], scores['backend_peak_batch'])} |",
+            f"| search total NPS      | "
+            f"{scores['search_total_nps'] if scores['search_total_nps'] is not None else '_n/a_'} |",
+            f"| phases ok / total     | "
+            f"{scores['phases_ok']}/{scores['phases_total']}"
+            f"{(' (skipped %d)' % scores['phases_skipped']) if scores['phases_skipped'] else ''} |",
+            "",
+        ]
+
+    lines += [
         "## phases",
         "",
         "| phase | status | duration_s | summary |",
@@ -800,6 +953,7 @@ def write_summary(report_dir: Path,
         "## files",
         "",
         "- [build_info.md](build_info.md)",
+        "- [scores.csv](scores.csv)",
         "- [unit_tests.csv](unit_tests.csv)",
         "- [backend_bench.csv](backend_bench.csv)",
         "- [search_bench.csv](search_bench.csv)",
@@ -910,11 +1064,25 @@ def cmd_run(args: argparse.Namespace) -> int:
     finished_t = time.time()
     finished_utc = utc_iso()
 
+    scores = compute_scores(phases_summary)
+    write_scores_csv(report_dir, scores)
+
     write_build_info(report_dir, lc0, net, args, started_utc, finished_utc,
                      finished_t - started_t, phases_summary, builddir)
     write_summary(report_dir, phases_summary, started_utc, finished_utc,
-                  finished_t - started_t, lc0, net, args)
+                  finished_t - started_t, lc0, net, args, scores=scores)
 
+    score_blurbs: List[str] = []
+    if scores["correctness_score"] is not None:
+        score_blurbs.append(f"correctness={scores['correctness_score']:.1f}")
+    if scores["stability_score"] is not None:
+        score_blurbs.append(f"stability={scores['stability_score']:.1f}")
+    if scores["backend_peak_nps"] is not None:
+        score_blurbs.append(f"peak_nps={scores['backend_peak_nps']}")
+    if scores["search_total_nps"] is not None:
+        score_blurbs.append(f"search_nps={scores['search_total_nps']}")
+    if score_blurbs:
+        print(f"[eval] scores: {' '.join(score_blurbs)}", flush=True)
     print(f"[eval] done in {finished_t - started_t:.1f}s -> {report_dir}", flush=True)
     return 1 if any(v.get("status") == "FAILED" for v in phases_summary.values()) else 0
 
@@ -1074,6 +1242,45 @@ def _compare_tactics(base: Path, cur: Path) -> str:
     return "\n".join(out)
 
 
+def _compare_scores(base: Path, cur: Path) -> str:
+    b_rows = read_csv(base / "scores.csv")
+    c_rows = read_csv(cur / "scores.csv")
+    if not b_rows or not c_rows:
+        return ""
+    b, c = b_rows[0], c_rows[0]
+
+    def num(d: Dict[str, str], k: str, cast=float) -> Optional[float]:
+        v = d.get(k, "")
+        if v == "" or v is None:
+            return None
+        try:
+            return cast(v)
+        except (TypeError, ValueError):
+            return None
+
+    rows: List[Tuple[str, Optional[float], Optional[float], str, int]] = [
+        ("correctness_score", num(b, "correctness_score"), num(c, "correctness_score"), "", 1),
+        ("stability_score",   num(b, "stability_score"),   num(c, "stability_score"),   "", 1),
+        ("unit_tests_pct",    num(b, "unit_tests_pct"),    num(c, "unit_tests_pct"),    "%", 2),
+        ("tactics_pct",       num(b, "tactics_pct"),       num(c, "tactics_pct"),       "%", 2),
+        ("backend_peak_nps",  num(b, "backend_peak_nps", int),
+                              num(c, "backend_peak_nps", int), "", 0),
+        ("search_total_nps",  num(b, "search_total_nps", int),
+                              num(c, "search_total_nps", int), "", 0),
+    ]
+    out = ["## score deltas", "",
+           "| metric | baseline | current | Δ |",
+           "| --- | --- | --- | --- |"]
+    for name, bv, cv, unit, prec in rows:
+        if bv is None and cv is None:
+            continue
+        bv_s = "—" if bv is None else (f"{bv:.{prec}f}{unit}" if prec else f"{int(bv)}{unit}")
+        cv_s = "—" if cv is None else (f"{cv:.{prec}f}{unit}" if prec else f"{int(cv)}{unit}")
+        delta = _fmt_delta(cv, bv, unit=unit, precision=prec)
+        out.append(f"| **{name}** | {bv_s} | {cv_s} | {delta} |")
+    return "\n".join(out)
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     base = Path(args.baseline).resolve()
     cur = Path(args.current).resolve()
@@ -1083,6 +1290,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         return 2
     sections = [
         f"# compare report\n\n- baseline: `{base}`\n- current:  `{cur}`\n",
+        _compare_scores(base, cur),
         _compare_unit_tests(base, cur),
         _compare_backend_bench(base, cur),
         _compare_search_bench(base, cur),

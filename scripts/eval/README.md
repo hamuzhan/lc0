@@ -100,7 +100,8 @@ Every successful `run` writes:
 ```
 eval-reports/<UTC>-<sha>[-dirty]/
 ├── build_info.md           # git, host, GPU, lc0 version, net hash, build options
-├── summary.md              # one-screen overview, links to the rest
+├── summary.md              # one-screen overview + scores, links to the rest
+├── scores.csv              # one-row CSV: headline metrics for tracking over time
 ├── unit_tests.csv          # suite, name, status, time_ms, message
 ├── backend_bench.csv       # batch_size, mean_nps, mean_ms, sdev_ms, cv,
 │                           # max_nps, median_nps, min_nps, first_max_ms, first_mean_ms
@@ -116,6 +117,25 @@ eval-reports/<UTC>-<sha>[-dirty]/
 
 `<phase>.failed` markers appear next to the CSVs when a phase soft-fails.
 `compare.md` is written in-place by `eval.py compare`.
+
+## Scores
+
+`summary.md` includes a `## scores` section and a one-row `scores.csv` for
+tracking headline numbers across runs:
+
+| field | meaning |
+|---|---|
+| `correctness_score` | mean of measured correctness rates (unit-test pass-rate, tactics solved-rate) — 0-100. Phases that didn't run or failed are excluded from the average, so a partial run still yields a meaningful number. |
+| `stability_score` | fraction of non-skipped phases that completed OK — 0-100. |
+| `unit_tests_passed` / `unit_tests_total` / `unit_tests_pct` | gtest pass-rate. |
+| `tactics_solved` / `tactics_total` / `tactics_pct` | EPD tactics solved rate. |
+| `backend_peak_nps` / `backend_peak_batch` | highest mean NPS seen in `backendbench` and the batch size at which it was reached. Hardware/net dependent — meaningful only relative to a baseline. |
+| `search_total_nps` / `search_total_nodes` | aggregate from `lc0 bench`/`benchmark`. |
+| `phases_ok` / `phases_failed` / `phases_skipped` / `phases_total` | counts. |
+
+Performance numbers are intentionally **not** normalized to a "/100" — absolute
+NPS is hardware-dependent, so a magic number would lie. Use `eval.py compare`
+to get a meaningful Δ% between two runs on the same machine.
 
 ## EPD format
 
