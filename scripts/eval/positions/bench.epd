@@ -1,0 +1,45 @@
+# scripts/eval/positions/bench.epd — small tactics suite for `eval.py run`.
+#
+# Format (one position per line):
+#   <piece-placement> <stm> <castling> <ep> bm <uci-move> [<uci-move>...]; id "<name>";
+# or
+#   <piece-placement> <stm> <castling> <ep> am <uci-move> [<uci-move>...]; id "<name>";
+#
+# IMPORTANT: bm/am operands are UCI long-algebraic moves (e.g. "e2e4", "g1h1",
+# "b7b8q"), NOT SAN. This deviates from standard EPD but lets us avoid shipping
+# a SAN→UCI converter. Multiple moves separated by spaces are alternatives —
+# any one of them counts as solved.
+#
+# Lines starting with '#' or empty are ignored. The eval.py tactics phase reads
+# this file, plays each FEN through UCI `go movetime`, and records solved=1 if
+# the engine's bestmove matches.
+
+# 1. Anastasia's mate: Ra1→Rh1# (knight on e7 boxes king, g7 pawn blocks escape).
+8/4N1pk/8/8/8/8/6K1/R7 w - - bm a1h1; id "anastasia-mate";
+
+# 2. Hanging queen: knight fork-capture wins material for free.
+6k1/8/8/8/3q4/5N2/6PP/6K1 w - - bm f3d4; id "free-queen-Nxd4";
+
+# 3. K+R vs K mate-in-1: any rook move to h1-h4 mates Kh8 (Kf7 covers g7,g8).
+7k/5K2/8/7R/8/8/8/8 w - - bm h5h1 h5h2 h5h3 h5h4; id "krvk-mate";
+
+# 4. Pawn promotion: only winning try is to queen the b-pawn.
+6k1/1P6/8/8/8/8/8/6K1 w - - bm b7b8q; id "promote-b8q";
+
+# 5. Back-rank mate: Ra1→Ra8# (f7/g7/h7 pawns trap king).
+7k/5ppp/8/8/8/8/8/R4K2 w - - bm a1a8; id "back-rank";
+
+# 6. Hanging queen: knight on g2 captures queen on f4.
+6k1/8/8/8/5q2/8/6N1/6K1 w - - bm g2f4; id "free-queen-Nxf4";
+
+# 7. Promotion + mate: pawn to d8 queen, defended by Ba5, mates Kc8.
+2k5/3P4/2K5/B7/8/8/8/8 w - - bm d7d8q; id "promote-mate";
+
+# 8. Hanging rook: bishop diagonal capture wins rook (Bxd5).
+6k1/8/8/3r4/8/5B2/6PP/6K1 w - - bm f3d5; id "free-rook-Bxd5";
+
+# 9. Mate in 1: Qb7→Qg7# (defended by Kf6, traps Kh8).
+7k/1Q6/5K2/8/8/8/8/8 w - - bm b7g7; id "queen-mate-Qg7";
+
+# 10. Free queen: Rxh8+ wins black's hanging queen on h8 with check.
+k6q/8/8/8/8/8/8/6KR w - - bm h1h8; id "skewer-Rxh8";
