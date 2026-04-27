@@ -137,6 +137,42 @@ Performance numbers are intentionally **not** normalized to a "/100" — absolut
 NPS is hardware-dependent, so a magic number would lie. Use `eval.py compare`
 to get a meaningful Δ% between two runs on the same machine.
 
+## PDF reports (optional)
+
+Pass `--pdf` to `run` or `compare` to also produce a vector PDF alongside the
+markdown/CSV outputs. PDF generation requires **matplotlib** and **numpy**;
+the default `run`/`compare` paths stay stdlib-only.
+
+```bash
+# render report.pdf into the run dir
+python3 scripts/eval/eval.py run --quick --net weights/foo.pb.gz --pdf
+
+# render compare.pdf alongside compare.md
+python3 scripts/eval/eval.py compare BASELINE_DIR CURRENT_DIR --pdf
+
+# (re)generate from existing CSVs without re-running the eval
+python3 scripts/eval/eval.py pdf  REPORT_DIR
+python3 scripts/eval/eval.py pdf  CURRENT_DIR --baseline BASELINE_DIR
+```
+
+`report.pdf` (~5 pages, A4 portrait):
+1. **Cover** — run metadata, scores table, scores radar chart.
+2. **Backend bench** — NPS vs batch (with min/max ribbon and peak marker), latency vs batch (mean ± stdev, cold-batch overlay).
+3. **Search bench** — per-position NPS bars (mean/median refs), bestmove labels, position-by-position table.
+4. **Tactics** — solved/unsolved bars per position, expected vs engine bestmove + eval + nodes.
+5. **Build info** — full key/value snapshot from `build_info.md`.
+
+A 6th page appears only when unit tests have failures or errors.
+
+`compare.pdf` (~4 pages):
+1. **Cover** — baseline/current paths, score deltas table, Δ% horizontal bar chart.
+2. **Backend bench overlay** — NPS curves + per-batch Δ% bars.
+3. **Search bench overlay** — side-by-side per-position bars + total NPS callout.
+4. **Tactics flips** — only positions whose `solved` status changed (or "no changes").
+
+PDFs embed TrueType fonts (DejaVu Sans), use `tab10` colours, and are vector —
+zoom in without quality loss.
+
 ## EPD format
 
 `positions/bench.epd` uses **UCI long-algebraic** moves for `bm`/`am` operands

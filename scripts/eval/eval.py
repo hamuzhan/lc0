@@ -1083,6 +1083,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         score_blurbs.append(f"search_nps={scores['search_total_nps']}")
     if score_blurbs:
         print(f"[eval] scores: {' '.join(score_blurbs)}", flush=True)
+
+    if getattr(args, "pdf", False):
+        try:
+            pdf_path = _render_run_pdf_or_die(report_dir)
+            print(f"[eval] pdf: {pdf_path}", flush=True)
+        except _PdfError as e:
+            print(f"[eval] pdf: skipped — {e}", file=sys.stderr, flush=True)
+
     print(f"[eval] done in {finished_t - started_t:.1f}s -> {report_dir}", flush=True)
     return 1 if any(v.get("status") == "FAILED" for v in phases_summary.values()) else 0
 
@@ -1299,6 +1307,74 @@ def cmd_compare(args: argparse.Namespace) -> int:
     out = cur / "compare.md"
     out.write_text("\n\n".join(s for s in sections if s).rstrip() + "\n")
     print(f"wrote {out}")
+
+    if getattr(args, "pdf", False):
+        try:
+            pdf_path = _render_compare_pdf_or_die(base, cur)
+            print(f"wrote {pdf_path}")
+        except _PdfError as e:
+            print(f"pdf: skipped — {e}", file=sys.stderr)
+            return 1
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# subcommand: pdf
+# ---------------------------------------------------------------------------
+
+class _PdfError(RuntimeError):
+    pass
+
+
+def _import_report_pdf():
+    try:
+        from . import report_pdf  # type: ignore
+    except (ImportError, ValueError):
+        # script is run directly; fall back to sibling import
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import report_pdf  # type: ignore
+        except ImportError as e:
+            missing = "matplotlib" if "matplotlib" in str(e) else (
+                "numpy" if "numpy" in str(e) else str(e))
+            raise _PdfError(
+                f"PDF generation requires matplotlib + numpy ({missing} missing). "
+                f"install with: pip install matplotlib numpy"
+            ) from e
+    return report_pdf
+
+
+def _render_run_pdf_or_die(report_dir: Path) -> Path:
+    rpdf = _import_report_pdf()
+    return rpdf.render_run_pdf(report_dir)
+
+
+def _render_compare_pdf_or_die(base: Path, cur: Path) -> Path:
+    rpdf = _import_report_pdf()
+    return rpdf.render_compare_pdf(base, cur)
+
+
+def cmd_pdf(args: argparse.Namespace) -> int:
+    report_dir = Path(args.report_dir).resolve()
+    if not report_dir.is_dir():
+        print(f"not a report dir: {report_dir}", file=sys.stderr)
+        return 2
+    try:
+        if args.baseline:
+            base = Path(args.baseline).resolve()
+            if not base.is_dir():
+                print(f"baseline not a report dir: {base}", file=sys.stderr)
+                return 2
+            out = _render_compare_pdf_or_die(base, report_dir)
+        else:
+            out = _render_run_pdf_or_die(report_dir)
+    except _PdfError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    except FileNotFoundError as e:
+        print(f"missing input: {e}", file=sys.stderr)
+        return 2
+    print(f"wrote {out}")
     return 0
 
 
@@ -1357,12 +1433,24 @@ def build_parser() -> argparse.ArgumentParser:
                          f"({','.join(ALL_PHASES)})")
     pr.add_argument("--epd", default=str(DEFAULT_EPD),
                     help="path to EPD file for tactics phase")
+    pr.add_argument("--pdf", action="store_true",
+                    help="also write report.pdf (requires matplotlib+numpy)")
     pr.set_defaults(func=cmd_run)
 
     pc = sub.add_parser("compare", help="diff two prior report dirs")
     pc.add_argument("baseline", help="baseline report directory")
     pc.add_argument("current", help="current report directory (compare.md is written here)")
+    pc.add_argument("--pdf", action="store_true",
+                    help="also write compare.pdf alongside compare.md")
     pc.set_defaults(func=cmd_compare)
+
+    pp = sub.add_parser("pdf",
+                        help="(re)generate report.pdf or compare.pdf from existing CSVs")
+    pp.add_argument("report_dir",
+                    help="report directory to render (target for compare PDF too)")
+    pp.add_argument("--baseline", default=None,
+                    help="render compare PDF against this baseline dir")
+    pp.set_defaults(func=cmd_pdf)
 
     pl = sub.add_parser("latest", help="print path of newest report directory")
     pl.add_argument("--reports-root", default=str(DEFAULT_REPORTS_DIR))
