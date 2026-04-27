@@ -16,6 +16,7 @@ import argparse
 import csv
 import datetime as dt
 import hashlib
+import json
 import os
 import platform
 import re
@@ -847,14 +848,22 @@ def write_build_info(report_dir: Path, lc0: Optional[Path],
 
     # build options snapshot
     build_options = ""
+    parsed_options: List[Dict[str, Any]] = []
     if builddir is not None:
         opts_file = builddir / "meson-info" / "intro-buildoptions.json"
         if opts_file.is_file():
             try:
                 build_options = opts_file.read_text()
-            except OSError:
-                pass
+                parsed_options = json.loads(build_options)
+            except (OSError, json.JSONDecodeError):
+                parsed_options = []
     info["build_options_snapshot"] = bool(build_options)
+
+    relevant_options = _filter_lc0_build_options(parsed_options)
+    if relevant_options:
+        write_csv(report_dir / "build_options.csv",
+                  ["name", "value", "type", "section", "description"],
+                  relevant_options)
 
     md_lines = [
         "# build_info",
@@ -871,6 +880,19 @@ def write_build_info(report_dir: Path, lc0: Optional[Path],
         md_lines.append(f"| {k} | `{v}` |")
     md_lines.append(f"| gpu | {('<br>'.join(f'`{g}`' for g in gpus)) or '_none_'} |")
     md_lines.append("")
+    if relevant_options:
+        md_lines.append("## build configuration")
+        md_lines.append("")
+        md_lines.append("Relevant lc0 + meson flags from "
+                        "`meson-info/intro-buildoptions.json` "
+                        "(full dump preserved below).")
+        md_lines.append("")
+        md_lines.append("| flag | value |")
+        md_lines.append("| --- | --- |")
+        for opt in relevant_options:
+            v = opt["value"]
+            md_lines.append(f"| `{opt['name']}` | `{v}` |")
+        md_lines.append("")
     if build_options:
         md_lines.append("## meson build options")
         md_lines.append("")
@@ -882,6 +904,51 @@ def write_build_info(report_dir: Path, lc0: Optional[Path],
         md_lines.append("</details>")
         md_lines.append("")
     (report_dir / "build_info.md").write_text("\n".join(md_lines))
+
+
+# Subset of meson options worth surfacing in the report. Order matters:
+# this is the order they appear in the report tables.
+_LC0_OPTION_FILTER: Tuple[str, ...] = (
+    # build basics
+    "buildtype", "optimization", "b_lto", "b_ndebug",
+    # CUDA family
+    "plain_cuda", "cudnn", "cutlass",
+    "native_cuda", "cc_cuda", "nvcc_ccbin",
+    # other backend families
+    "onnx", "xla", "sycl", "dx", "metal",
+    # binaries / behavior
+    "default_backend", "default_search",
+    "dag_classic", "rescorer", "python_bindings", "trace_library",
+    "gtest", "lc0", "build_backends",
+)
+
+
+def _filter_lc0_build_options(options: List[Dict[str, Any]]
+                              ) -> List[Dict[str, Any]]:
+    """Reduce the full intro-buildoptions list to the lc0-relevant subset
+    in stable display order. Each output row is a dict with name/value/
+    type/section/description as plain strings."""
+    by_name = {o.get("name"): o for o in options if isinstance(o, dict)}
+    out: List[Dict[str, Any]] = []
+    for name in _LC0_OPTION_FILTER:
+        if name not in by_name:
+            continue
+        o = by_name[name]
+        v = o.get("value")
+        if isinstance(v, list):
+            v = ",".join(str(x) for x in v)
+        elif isinstance(v, bool):
+            v = "True" if v else "False"
+        else:
+            v = "" if v is None else str(v)
+        out.append({
+            "name": name,
+            "value": v,
+            "type": o.get("type", ""),
+            "section": o.get("section", ""),
+            "description": (o.get("description") or "").strip(),
+        })
+    return out
 
 
 def write_summary(report_dir: Path,
@@ -902,6 +969,18 @@ def write_summary(report_dir: Path,
         f"- quick:    `{args.quick}`",
         "",
     ]
+
+    # build flags compact view (shown as one-liner if available)
+    build_opts_csv = report_dir / "build_options.csv"
+    if build_opts_csv.is_file():
+        rows = read_csv(build_opts_csv)
+        flagged = [(r["name"], r["value"]) for r in rows]
+        if flagged:
+            lines += ["## build flags", ""]
+            lines += ["| flag | value |", "| --- | --- |"]
+            for name, value in flagged:
+                lines.append(f"| `{name}` | `{value}` |")
+            lines += [""]
 
     if scores is not None:
         lines += [
@@ -948,12 +1027,17 @@ def write_summary(report_dir: Path,
             summary_bits.append(f"error={info['error']}")
         lines.append(f"| {phase} | {status} | {dur} | {'; '.join(summary_bits)} |")
 
-    lines += [
+    files_section = [
         "",
         "## files",
         "",
         "- [build_info.md](build_info.md)",
         "- [scores.csv](scores.csv)",
+    ]
+    if build_opts_csv.is_file():
+        files_section.append("- [build_options.csv](build_options.csv)")
+    lines += files_section
+    lines += [
         "- [unit_tests.csv](unit_tests.csv)",
         "- [backend_bench.csv](backend_bench.csv)",
         "- [search_bench.csv](search_bench.csv)",

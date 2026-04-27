@@ -104,6 +104,10 @@ def _read_scores(report_dir: Path) -> Dict[str, str]:
     return rows[0] if rows else {}
 
 
+def _read_build_options(report_dir: Path) -> List[Dict[str, str]]:
+    return _read_csv(report_dir / "build_options.csv")
+
+
 def _to_float(s: Any) -> Optional[float]:
     try:
         return float(s)
@@ -697,6 +701,32 @@ def _score_delta_table_tex(b_scores: Dict[str, str],
     return "\n".join(out)
 
 
+def _build_options_table_tex(rows: List[Dict[str, str]]) -> str:
+    """Render the lc0 build-flag rows as a 3-column booktabs table.
+    Long descriptions are softened with \\seqsplit-per-token to wrap."""
+    if not rows:
+        return r"\textit{(no build options recorded)}"
+    out = [
+        r"\begin{tabularx}{\linewidth}{@{}>{\ttfamily\small}lL{0.16\linewidth}>{\small}X@{}}",
+        r"\toprule",
+        r"\textbf{flag} & \textbf{value} & \textbf{description} \\",
+        r"\midrule",
+    ]
+    for r in rows:
+        v = r.get("value", "")
+        # value column: bold for True/non-trivial, dim for False/empty
+        if v in ("False", "off", "0", ""):
+            v_tex = r"\textcolor{neutral}{" + (_esc(v) or r"\textit{(default)}") + "}"
+        elif v in ("True", "on", "1"):
+            v_tex = r"\textcolor{good}{\bfseries " + _esc(v) + "}"
+        else:
+            v_tex = r"\texttt{\bfseries " + _esc(v) + "}"
+        desc = r.get("description", "")
+        out.append(f"{_esc(r.get('name',''))} & {v_tex} & {_esc(desc)} \\\\")
+    out += [r"\bottomrule", r"\end{tabularx}"]
+    return "\n".join(out)
+
+
 def _search_table_tex(rows: List[Dict[str, str]]) -> str:
     if not rows:
         return r"\textit{(no data)}"
@@ -892,6 +922,7 @@ def render_run_pdf(report_dir: Path) -> Path:
                    if (r.get("status") or "").lower()
                    in ("failed", "errored", "error")]
     build_info = _read_build_info_md(report_dir / "build_info.md")
+    build_options = _read_build_options(report_dir)
 
     sha_short = build_info.get("git_short") or build_info.get("git_sha", "")[:7]
     started = build_info.get("started_utc", "") or "(unknown)"
@@ -923,6 +954,7 @@ def render_run_pdf(report_dir: Path) -> Path:
             unit_rows=unit_rows,
             failed_unit=failed_unit,
             build_info=build_info,
+            build_options=build_options,
             sha=sha_short,
             started=started,
             figs_present=(figs_dir.iterdir().__next__() is not None
@@ -1022,7 +1054,8 @@ def _build_run_tex(*, report_dir: Path,
                    unit_rows: List[Dict[str, str]],
                    failed_unit: List[Dict[str, str]],
                    build_info: Dict[str, str],
-                   sha: str, started: str,
+                   build_options: Optional[List[Dict[str, str]]] = None,
+                   sha: str = "", started: str = "",
                    figs_present: bool = True) -> str:
 
     parts: List[str] = []
@@ -1041,7 +1074,22 @@ def _build_run_tex(*, report_dir: Path,
     parts.append(r"\section{Run Metadata}")
     parts.append(_kv_table_tex_pretyped(_build_metadata_rows(build_info)))
 
-    # ---- 2. Headline scores ----
+    # ---- 2. Build configuration ----
+    if build_options:
+        parts.append(r"\section{Build Configuration}")
+        parts.append(
+            r"This is the lc0-relevant subset of the meson build options "
+            r"that produced the binary under test, parsed from "
+            r"\texttt{builddir/meson-info/intro-buildoptions.json}. "
+            r"Values shown in \textcolor{good}{\bfseries green} are "
+            r"enabled (\texttt{True}/\texttt{on}); "
+            r"\textcolor{neutral}{\textit{greyed}} values are disabled "
+            r"or left at the default."
+        )
+        parts.append(r"\par\medskip")
+        parts.append(_build_options_table_tex(build_options))
+
+    # ---- 3. Headline scores ----
     parts.append(r"\section{Headline Scores}")
     parts.append(
         r"This section reports the composite scores computed by "
