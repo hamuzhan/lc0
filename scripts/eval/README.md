@@ -139,9 +139,26 @@ to get a meaningful Δ% between two runs on the same machine.
 
 ## PDF reports (optional)
 
-Pass `--pdf` to `run` or `compare` to also produce a vector PDF alongside the
-markdown/CSV outputs. PDF generation requires **matplotlib** and **numpy**;
-the default `run`/`compare` paths stay stdlib-only.
+Pass `--pdf` to `run` or `compare` to render a paper-style PDF alongside
+the markdown/CSV outputs. The renderer assembles a LaTeX `article`
+document (title page, abstract, sections per phase, booktabs tables,
+appendix), with charts embedded as vector PDFs from matplotlib, then
+compiles it via `pdflatex` (run twice for cross-references).
+
+Requirements:
+- **matplotlib** + **numpy** (Python deps for the figures)
+- **pdflatex** + standard packages (booktabs, tabularx, hyperref,
+  fancyhdr, microtype, caption, siunitx, amssymb, float, enumitem,
+  seqsplit). On Debian/Ubuntu, install with:
+
+  ```bash
+  sudo apt-get install texlive-latex-recommended texlive-latex-extra \
+                       texlive-fonts-recommended texlive-science
+  ```
+
+The default `run`/`compare` paths stay stdlib-only — `--pdf` is opt-in,
+and a missing `pdflatex` produces a friendly error rather than crashing
+the eval.
 
 ```bash
 # render report.pdf into the run dir
@@ -155,23 +172,26 @@ python3 scripts/eval/eval.py pdf  REPORT_DIR
 python3 scripts/eval/eval.py pdf  CURRENT_DIR --baseline BASELINE_DIR
 ```
 
-`report.pdf` (~5 pages, A4 portrait):
-1. **Cover** — run metadata, scores table, scores radar chart.
-2. **Backend bench** — NPS vs batch (with min/max ribbon and peak marker), latency vs batch (mean ± stdev, cold-batch overlay).
-3. **Search bench** — per-position NPS bars (mean/median refs), bestmove labels, position-by-position table.
-4. **Tactics** — solved/unsolved bars per position, expected vs engine bestmove + eval + nodes.
-5. **Build info** — full key/value snapshot from `build_info.md`.
+`report.pdf` (~5 pages, A4 portrait, `article` class):
+1. **Cover** — title block, automated abstract, run-metadata `tabularx` table.
+2. **Headline scores** — methodology paragraph, scores table, score radar chart.
+3. **Backend Microbenchmark** — NPS vs batch (with min/max ribbon and peak marker), latency vs batch (mean ± stdev, cold-batch overlay).
+4. **Search Benchmark** — per-position NPS bars (mean/median refs), bestmove labels above bars, full per-position table.
+5. **Tactics Suite** — solved/unsolved bars by position id, expected vs engine bestmove + eval + nodes table (✓/✗ glyphs in green/red).
+6. **Unit Tests** — pass-count summary; failure table only when failures exist.
+7. **Appendix A: Build Information** — full key/value snapshot in a `description` list (long paths wrap via `\seqsplit`).
 
-A 6th page appears only when unit tests have failures or errors.
+`compare.pdf` (~3-4 pages):
+1. **Subjects + Score Deltas** — paths/sha block, score-delta `tabularx` (green/red), Δ% horizontal bar chart.
+2. **Backend Microbenchmark** — NPS curves overlaid + per-batch Δ% bars.
+3. **Search Benchmark** — side-by-side per-position bars + total-NPS Δ callout.
+4. **Tactics Flips** — only positions whose `solved` status changed (or "no changes" message).
 
-`compare.pdf` (~4 pages):
-1. **Cover** — baseline/current paths, score deltas table, Δ% horizontal bar chart.
-2. **Backend bench overlay** — NPS curves + per-batch Δ% bars.
-3. **Search bench overlay** — side-by-side per-position bars + total NPS callout.
-4. **Tactics flips** — only positions whose `solved` status changed (or "no changes").
+PDFs embed TrueType fonts (DejaVu Sans for figures, Computer Modern for body),
+use `tab10` colours, and are vector — zoom in without quality loss.
 
-PDFs embed TrueType fonts (DejaVu Sans), use `tab10` colours, and are vector —
-zoom in without quality loss.
+**Compilation artefacts** (`.aux`, `.log`, `.out`) are written to a temp dir
+and removed automatically; only the final PDF lands in the report dir.
 
 ## EPD format
 
